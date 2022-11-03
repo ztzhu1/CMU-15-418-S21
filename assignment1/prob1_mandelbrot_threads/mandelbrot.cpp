@@ -1,5 +1,6 @@
 #include <stdio.h>
 #include <pthread.h>
+#include <math.h>
 
 // Use this code to time your threads
 #include "CycleTimer.h"
@@ -119,6 +120,27 @@ void* workerThreadStart(void* threadArgs) {
     WorkerArgs* args = static_cast<WorkerArgs*>(threadArgs);
 
     // TODO: Implement worker thread here.
+    float dx = (args->x1 - args->x0) / args->width;
+    float dy = (args->y1 - args->y0) / args->height;
+
+    int totalRow = ceil((float)args->height / (float)args->numThreads);
+    int startRow = args->threadId * totalRow;
+
+    if (args->threadId == args->numThreads - 1)
+        totalRow = args->height - startRow;
+
+    int endRow = startRow + totalRow;
+
+    for (int j = startRow; j < endRow; j++) {
+        for (int i = 0; i < args->width; ++i) {
+            float x = args->x0 + i * dx;
+            float y = args->y0 + j * dy;
+
+            int index = (j * args->width + i);
+            args->output[index] = mandel(x, y, args->maxIterations);
+        }
+    }
+
     return NULL;
 }
 
@@ -147,6 +169,15 @@ void mandelbrotThread(
     for (int i=0; i<numThreads; i++) {
         args[i].threadId = i;
 	// TODO: Set thread arguments here
+        args[i].x0 = x0;
+        args[i].x1 = x1;
+        args[i].y0 = y0;
+        args[i].y1 = y1;
+        args[i].width = width;
+        args[i].height = height;
+        args[i].maxIterations = maxIterations;
+        args[i].output = output;
+        args[i].numThreads = numThreads;
     }
 
     // Fire up the worker threads.  Note that numThreads-1 pthreads
@@ -156,6 +187,8 @@ void mandelbrotThread(
     for (int i=1; i<numThreads; i++)
         pthread_create(&workers[i], NULL, workerThreadStart, &args[i]);
 
+    // The main thread not only takes responsibility for thread
+    // schedualing, but also takes part in computation.
     workerThreadStart(&args[0]);
 
     // wait for worker threads to complete

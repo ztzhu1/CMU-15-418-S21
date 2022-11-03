@@ -15,18 +15,19 @@ default: $(APP_NAME)
 .PHONY: dirs clean
 
 dirs:
-		/bin/mkdir -p $(OBJDIR)/
+	/bin/mkdir -p $(OBJDIR)/
 
 clean:
-		/bin/rm -rf $(OBJDIR) *.ppm *~ $(APP_NAME)
+	#/bin/rm -rf $(OBJDIR) *.ppm *~ $(APP_NAME)
+	/bin/rm -rf *.ppm
 
 OBJS=$(OBJDIR)/main.o $(OBJDIR)/mandelbrot.o $(PPM_OBJ)
 
 $(APP_NAME): dirs $(OBJS)
-		$(CXX) $(CXXFLAGS) -o $@ $(OBJS) -lm -lpthread
+	$(CXX) $(CXXFLAGS) -o $@ $(OBJS) -lm -lpthread
 
 $(OBJDIR)/%.o: %.cpp
-		$(CXX) $< $(CXXFLAGS) -c -o $@
+	$(CXX) $< $(CXXFLAGS) -c -o $@
 
 $(OBJDIR)/%.o: $(COMMONDIR)/%.cpp
 	$(CXX) $< $(CXXFLAGS) -c -o $@
