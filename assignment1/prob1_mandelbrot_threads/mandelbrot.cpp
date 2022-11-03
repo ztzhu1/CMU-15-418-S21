@@ -117,6 +117,8 @@ typedef struct {
 // Thread entrypoint.
 void* workerThreadStart(void* threadArgs) {
 
+    double start = CycleTimer::currentSeconds();
+
     WorkerArgs* args = static_cast<WorkerArgs*>(threadArgs);
 
     // TODO: Implement worker thread here.
@@ -140,6 +142,10 @@ void* workerThreadStart(void* threadArgs) {
             args->output[index] = mandel(x, y, args->maxIterations);
         }
     }
+
+    double end = CycleTimer::currentSeconds();
+
+    printf("thread %d: %.3lf ms\n", args->threadId, (end - start) * 1000);
 
     return NULL;
 }
