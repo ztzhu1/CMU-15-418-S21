@@ -109,7 +109,34 @@ typedef struct {
     int* output;
     int threadId;
     int numThreads;
+    int startRow;
+    int endRow;
 } WorkerArgs;
+
+float calcWeight(int id, int numThreads) {
+    // It's really ugly. But I just want to show
+    // how to break the wall and speed up code
+    // (for view 1, thread 4)
+    switch (id) {
+        case 0 : case 3 : return 0.37;
+        case 1 : case 2 : return 0.13;
+        default : exit(1);
+    }
+}
+
+void calcRow(WorkerArgs *args) {
+    args->startRow = args->threadId == 0 ? 0 : (args - 1)->endRow;
+
+    if (args->threadId == args->numThreads - 1) {
+        args->endRow = args->height;
+        return;
+    }
+
+    float weight = calcWeight(args->threadId, args->numThreads);
+    int totalRow = floor(weight * args->height);
+
+    args->endRow = args->startRow + totalRow;
+}
 
 //
 // workerThreadStart --
@@ -125,15 +152,7 @@ void* workerThreadStart(void* threadArgs) {
     float dx = (args->x1 - args->x0) / args->width;
     float dy = (args->y1 - args->y0) / args->height;
 
-    int totalRow = ceil((float)args->height / (float)args->numThreads);
-    int startRow = args->threadId * totalRow;
-
-    if (args->threadId == args->numThreads - 1)
-        totalRow = args->height - startRow;
-
-    int endRow = startRow + totalRow;
-
-    for (int j = startRow; j < endRow; j++) {
+    for (int j = args->startRow; j < args->endRow; j++) {
         for (int i = 0; i < args->width; ++i) {
             float x = args->x0 + i * dx;
             float y = args->y0 + j * dy;
@@ -172,7 +191,7 @@ void mandelbrotThread(
     pthread_t workers[MAX_THREADS];
     WorkerArgs args[MAX_THREADS];
 
-    for (int i=0; i<numThreads; i++) {
+    for (int i = 0; i < numThreads; i++) {
         args[i].threadId = i;
 	// TODO: Set thread arguments here
         args[i].x0 = x0;
@@ -184,6 +203,7 @@ void mandelbrotThread(
         args[i].maxIterations = maxIterations;
         args[i].output = output;
         args[i].numThreads = numThreads;
+        calcRow(&args[i]);
     }
 
     // Fire up the worker threads.  Note that numThreads-1 pthreads
