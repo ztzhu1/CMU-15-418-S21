@@ -81,9 +81,42 @@ void clampedExpSerial(float* values, int* exponents, float* output, int N) {
     }
 }
 
-void clampedExpVector(float* values, int* exponents, float* output, int N) {
+void clampedExpVector(float* values, int* exponents, float* output, int N)
+{
     // TODO: Implement your vectorized version of clampedExpSerial here
     //  ...
+    __cmu418_vec_float x;
+    __cmu418_vec_int y, yAnd1;
+    __cmu418_vec_float result;
+    __cmu418_vec_int zero = _cmu418_vset_int(0);
+    __cmu418_vec_int one = _cmu418_vset_int(0x01);
+    __cmu418_vec_float _4_18 = _cmu418_vset_float(4.18f);
+	__cmu418_mask maskAll, gtZeroMask, gt418Mask, ngt418Mask;
+	maskAll = _cmu418_init_ones();
+
+	for (int i = 0; i < N; i += VECTOR_WIDTH)
+	{
+		_cmu418_vload_float(x, values + i, maskAll);
+		_cmu418_vload_int(y, exponents + i, maskAll);
+		result = _cmu418_vset_float(1.f);
+
+		while (any_of(y.value, y.value + VECTOR_WIDTH, [](int i) { return i!=0; }))
+		{
+			gt418Mask = _cmu418_init_ones(0);
+			_cmu418_vbitand_int(yAnd1, y, one, maskAll);
+			_cmu418_vgt_int(gtZeroMask, yAnd1, zero, maskAll);
+			_cmu418_vmult_float(result, result, x, gtZeroMask);
+			_cmu418_vgt_float(gt418Mask, result, _4_18, gtZeroMask);
+			_cmu418_vset_float(result, 4.18f, gt418Mask);
+			_cmu418_vset_int(y, 0, gt418Mask);
+
+			ngt418Mask = _cmu418_mask_not(gt418Mask);
+
+			_cmu418_vmult_float(x, x, x, ngt418Mask);
+			_cmu418_vshiftright_int(y, y, one, ngt418Mask);
+		}
+		_cmu418_vstore_float(output + i, result, maskAll);
+    }
 }
 
 
@@ -101,5 +134,21 @@ float arraySumSerial(float* values, int N) {
 float arraySumVector(float* values, int N) {
     // TODO: Implement your vectorized version here
     // ...
-    return 0.f;
+    __cmu418_vec_float x;
+    __cmu418_vec_float result = _cmu418_vset_float(0.f);
+	__cmu418_mask maskAll = _cmu418_init_ones();
+
+	for (int i = 0; i < N; i += VECTOR_WIDTH)
+	{
+		_cmu418_vload_float(x, values + i, maskAll);
+		_cmu418_vadd_float(result, result, x, maskAll);
+	}
+	for (int i = 0; i < (int)log2(VECTOR_WIDTH) - 1; i++)
+	{
+		_cmu418_hadd_float(result, result);
+		_cmu418_interleave_float(result, result);
+	}
+	_cmu418_hadd_float(result, result);
+
+	return result.value[0];
 }
