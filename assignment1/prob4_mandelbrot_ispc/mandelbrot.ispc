@@ -92,11 +92,34 @@ export void mandelbrot_ispc_par2(uniform float x0, uniform float y0,
     // You should handle the case where the height is not a multiple
     // of 2.
 
+    foreach (j = 0 ... height / 2, i = 0 ... width)
+    {
+        float x = x0 + i * dx;
+        float y_0 = y0 + (2 * j) * dy;
+        float y_1 = y0 + (2 * j + 1) * dy;
+
+        int index0 = (2 * j) * width + i;
+        int index1 = (2 * j + 1) * width + i;
+        mandel_par2(x, y_0, x, y_1, maxIterations, &output[index0], &output[index1]);
+    }
+    if (height % 2 != 0)
+    {
+        uniform int j = height - 1;
+
+        foreach (i = 0 ... width)
+        {
+            float x = x0 + i * dx;
+            float y = y0 + j * dy;
+
+            int index = j * width + i;
+            output[index] = mandel(x, y, maxIterations);
+        }
+    }
 }
 
 // TODO: Try different block sizes
-#define BLOCK_WIDTH  800
-#define BLOCK_HEIGHT 600
+#define BLOCK_WIDTH  200
+#define BLOCK_HEIGHT 10
 
 // slightly different kernel to support tasking
 task void mandelbrot_ispc_task(uniform float x0, uniform float y0, 
@@ -135,7 +158,9 @@ export void mandelbrot_ispc_withtasks(uniform float x0, uniform float y0,
 {
 
     // TODO: Figure out how many tasks to launch
-    uniform int taskCount = 4;
+    uniform int bstride_x = (width + BLOCK_WIDTH - 1) / BLOCK_WIDTH;
+    uniform int bstride_y = (height + BLOCK_HEIGHT - 1) / BLOCK_HEIGHT;
+    uniform int taskCount = bstride_x * bstride_y;
 
     // create a bunch of tasks
     launch[taskCount] mandelbrot_ispc_task(x0, y0, x1, y1,
