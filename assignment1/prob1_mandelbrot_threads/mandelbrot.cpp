@@ -109,34 +109,7 @@ typedef struct {
     int* output;
     int threadId;
     int numThreads;
-    int startRow;
-    int endRow;
 } WorkerArgs;
-
-float calcWeight(int id, int numThreads) {
-    // It's really ugly. But I just want to show
-    // how to break the wall and speed up code
-    // (for view 1, thread 4)
-    switch (id) {
-        case 0 : case 3 : return 0.37;
-        case 1 : case 2 : return 0.13;
-        default : exit(1);
-    }
-}
-
-void calcRow(WorkerArgs *args) {
-    args->startRow = args->threadId == 0 ? 0 : (args - 1)->endRow;
-
-    if (args->threadId == args->numThreads - 1) {
-        args->endRow = args->height;
-        return;
-    }
-
-    float weight = calcWeight(args->threadId, args->numThreads);
-    int totalRow = floor(weight * args->height);
-
-    args->endRow = args->startRow + totalRow;
-}
 
 //
 // workerThreadStart --
@@ -152,8 +125,8 @@ void* workerThreadStart(void* threadArgs) {
     float dx = (args->x1 - args->x0) / args->width;
     float dy = (args->y1 - args->y0) / args->height;
 
-    for (int j = args->startRow; j < args->endRow; j++) {
-        for (int i = 0; i < args->width; ++i) {
+    for (int j = 0; j < args->height; j++) {
+        for (int i = args->threadId; i < args->width; i += args->numThreads) {
             float x = args->x0 + i * dx;
             float y = args->y0 + j * dy;
 
@@ -203,7 +176,6 @@ void mandelbrotThread(
         args[i].maxIterations = maxIterations;
         args[i].output = output;
         args[i].numThreads = numThreads;
-        calcRow(&args[i]);
     }
 
     // Fire up the worker threads.  Note that numThreads-1 pthreads
