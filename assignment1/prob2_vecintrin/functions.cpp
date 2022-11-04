@@ -96,11 +96,15 @@ void clampedExpVector(float* values, int* exponents, float* output, int N)
 
 	for (int i = 0; i < N; i += VECTOR_WIDTH)
 	{
+		int tail = min(VECTOR_WIDTH, N - i);
+		if (tail < VECTOR_WIDTH)
+			maskAll = _cmu418_init_ones(tail);
+
 		_cmu418_vload_float(x, values + i, maskAll);
 		_cmu418_vload_int(y, exponents + i, maskAll);
 		result = _cmu418_vset_float(1.f);
 
-		while (any_of(y.value, y.value + VECTOR_WIDTH, [](int i) { return i!=0; }))
+		while (any_of(y.value, y.value + tail, [](int i) { return i!=0; }))
 		{
 			gt418Mask = _cmu418_init_ones(0);
 			_cmu418_vbitand_int(yAnd1, y, one, maskAll);
