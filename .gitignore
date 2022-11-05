@@ -1,7 +1,10 @@
 *
-!*.h
-!*.c
-!*.cpp
-!*.py
+!*/
+!*.*
 !Makefile
 !.gitignore
+.vscode
+*.o
+objs
+*.pl
+*.ppm
