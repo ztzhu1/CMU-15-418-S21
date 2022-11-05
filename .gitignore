@@ -3,8 +3,9 @@
 !*.*
 !Makefile
 !.gitignore
+objs
 .vscode
 *.o
-objs
+*.log
 *.pl
 *.ppm
