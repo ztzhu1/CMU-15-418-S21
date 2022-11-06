@@ -422,17 +422,42 @@ __global__ void kernelRenderCircles() {
     float invHeight = 1.f / imageHeight;
 
     // For all pixels in the bounding box
-    for (int i = 0; i < cuConstRendererParams.numberOfCircles; i++) {
-        if (i != index) continue;
-        for (int pixelY=screenMinY; pixelY<screenMaxY; pixelY++) {
-            float4* imgPtr = (float4*)(&cuConstRendererParams.imageData[4 * (pixelY * imageWidth + screenMinX)]);
-            for (int pixelX=screenMinX; pixelX<screenMaxX; pixelX++) {
-                float2 pixelCenterNorm = make_float2(invWidth * (static_cast<float>(pixelX) + 0.5f),
-                                                    invHeight * (static_cast<float>(pixelY) + 0.5f));
-                shadePixel(pixelCenterNorm, p, imgPtr, index);
-                imgPtr++;
-            }
+    for (int pixelY=screenMinY; pixelY<screenMaxY; pixelY++) {
+        float4* imgPtr = (float4*)(&cuConstRendererParams.imageData[4 * (pixelY * imageWidth + screenMinX)]);
+        for (int pixelX=screenMinX; pixelX<screenMaxX; pixelX++) {
+            float2 pixelCenterNorm = make_float2(invWidth * (static_cast<float>(pixelX) + 0.5f),
+                                                 invHeight * (static_cast<float>(pixelY) + 0.5f));
+            shadePixel(pixelCenterNorm, p, imgPtr, index);
+            imgPtr++;
         }
+    }
+}
+
+// Each thread renders a pixel.
+__global__ void kernelRenderPixels() {
+
+    short imageWidth = cuConstRendererParams.imageWidth;
+    short imageHeight = cuConstRendererParams.imageHeight;
+    float invWidth = 1.f / imageWidth;
+    float invHeight = 1.f / imageHeight;
+    int index = blockIdx.x * blockDim.x + threadIdx.x;
+    int pixelX = index % imageWidth;
+    int pixelY = index / imageWidth;
+
+    if ((short)index >= imageWidth * imageHeight)
+        return;
+
+    float4* imgPtr = (float4*)(&cuConstRendererParams.imageData[4 * index]);
+    float3 p;
+    float2 pixelCenterNorm;
+
+    for (int i = 0; i < cuConstRendererParams.numberOfCircles; i++) {
+        // Read position and radius
+        p = *(float3*)(&cuConstRendererParams.position[i * 3]);
+        // relative position
+        pixelCenterNorm = make_float2(invWidth * (static_cast<float>(pixelX) + 0.5f), invHeight * (static_cast<float>(pixelY) + 0.5f));
+        // wite pixel data
+        shadePixel(pixelCenterNorm, p, imgPtr, i);
     }
 }
 
@@ -658,8 +683,9 @@ void
 CudaRenderer::render() {
     // 256 threads per block is a healthy number
     dim3 blockDim(256, 1);
-    dim3 gridDim((numberOfCircles + blockDim.x - 1) / blockDim.x);
+    int pixelNum = image->width * image->height;
+    dim3 gridDim((pixelNum + blockDim.x - 1) / blockDim.x);
 
-    kernelRenderCircles<<<gridDim, blockDim>>>();
+    kernelRenderPixels<<<gridDim, blockDim>>>();
     cudaDeviceSynchronize();
 }
