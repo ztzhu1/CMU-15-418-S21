@@ -422,13 +422,16 @@ __global__ void kernelRenderCircles() {
     float invHeight = 1.f / imageHeight;
 
     // For all pixels in the bounding box
-    for (int pixelY=screenMinY; pixelY<screenMaxY; pixelY++) {
-        float4* imgPtr = (float4*)(&cuConstRendererParams.imageData[4 * (pixelY * imageWidth + screenMinX)]);
-        for (int pixelX=screenMinX; pixelX<screenMaxX; pixelX++) {
-            float2 pixelCenterNorm = make_float2(invWidth * (static_cast<float>(pixelX) + 0.5f),
-                                                 invHeight * (static_cast<float>(pixelY) + 0.5f));
-            shadePixel(pixelCenterNorm, p, imgPtr, index);
-            imgPtr++;
+    for (int i = 0; i < cuConstRendererParams.numberOfCircles; i++) {
+        if (i != index) continue;
+        for (int pixelY=screenMinY; pixelY<screenMaxY; pixelY++) {
+            float4* imgPtr = (float4*)(&cuConstRendererParams.imageData[4 * (pixelY * imageWidth + screenMinX)]);
+            for (int pixelX=screenMinX; pixelX<screenMaxX; pixelX++) {
+                float2 pixelCenterNorm = make_float2(invWidth * (static_cast<float>(pixelX) + 0.5f),
+                                                    invHeight * (static_cast<float>(pixelY) + 0.5f));
+                shadePixel(pixelCenterNorm, p, imgPtr, index);
+                imgPtr++;
+            }
         }
     }
 }
