@@ -6,6 +6,7 @@
 objs
 .vscode
 *.o
+*.d
 *.log
 *.pl
 *.ppm
