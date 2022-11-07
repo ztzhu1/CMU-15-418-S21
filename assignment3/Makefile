@@ -5,8 +5,8 @@ CXXFLAGS += -Wall -Wextra -pthread -fopenmp -g -O3 -DNDEBUG
 
 all: release
 
-release: wsp.c
-	g++ wsp.c -o wsp $(CXXFLAGS)
+release: wsp.cpp
+	g++ wsp.cpp -o wsp $(CXXFLAGS)
 
 clean:
 	rm -f ./wsp

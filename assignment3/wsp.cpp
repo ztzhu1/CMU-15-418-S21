@@ -7,9 +7,11 @@
 #include <error.h>
 #include <limits.h>
 #include <pthread.h>
+#include <vector>
+#include <algorithm>
 
 // TODO: You may find this helpful.
-//#include <omp.h>
+#include <omp.h>
 
 /*
 ________________________________________________
@@ -102,23 +104,64 @@ void wsp_print_result() {
   return;
 }
 
-
 void wsp_start() {
 
   // TODO: try finding a better path.
-  int cityID = 0;
-  for(cityID=0; cityID < NCITIES; cityID++) {
-    bestPath->path[cityID] = cityID;
-    if(cityID>0) bestPath->cost += get_dist(bestPath->path[cityID-1],bestPath->path[cityID]);
-  }
 
-  return;
+  bestPath->cost = 0x7FFFFFFF; // 2^31 - 1
+
+  int currCost = 0;
+  std::vector<int> currPath(NCITIES);
+  int i = 0, tmp = 0;
+
+  #pragma omp parallel for firstprivate(currCost, currPath, i, tmp)
+  for (int initID = 0; initID < NCITIES; initID++)
+  {
+    currPath[0] = initID;
+    for (i = 1; i < NCITIES; i++)
+    {
+      currPath[i] = (currPath[i - 1] + 1) % NCITIES;
+      currCost += get_dist(currPath[i - 1], currPath[i]);
+    }
+
+    #pragma omp critical
+    {
+      if (currCost < bestPath->cost)
+      {
+        std::copy(currPath.begin(), currPath.end(), bestPath->path);
+        bestPath->cost = currCost;
+      }
+    }
+
+    while(std::next_permutation(currPath.begin() + 1, currPath.end()))
+    {
+      currCost = 0;
+      for(i = 1; i < NCITIES; i++)
+      {
+        currCost += get_dist(currPath[i - 1], currPath[i]);
+        #pragma omp atomic read
+        tmp = bestPath->cost;
+        if (currCost >= tmp)
+          break;
+      }
+      if (i == NCITIES)
+      {
+        #pragma omp critical
+        {
+          std::copy(currPath.begin(), currPath.end(), bestPath->path);
+          bestPath->cost = currCost;
+        }
+      }
+    }
+  }
 }
 
 int main(int argc, char **argv) {
   if(argc < 4 || strcmp(argv[1], "-p") != 0) error_exit("Expecting two arguments: -p [processor count] and [file name]\n");
   NCORES = atoi(argv[2]);
   if(NCORES < 1) error_exit("Illegal core count: %d\n", NCORES);
+  omp_set_num_threads(NCORES);
+
   char *filename = argv[3];
   FILE *fp = fopen(filename, "r");
   if(fp == NULL) error_exit("Failed to open input file \"%s\"\n", filename);
