@@ -110,15 +110,15 @@ void wsp_start() {
 
   bestPath->cost = 0x7FFFFFFF; // 2^31 - 1
 
-  int currCost = 0;
-  std::vector<int> currPath(NCITIES);
-  int i = 0, tmp = 0;
 
-  #pragma omp parallel for firstprivate(currCost, currPath, i, tmp)
+  #pragma omp parallel for
   for (int initID = 0; initID < NCITIES; initID++)
   {
+    int currCost = 0;
+    std::vector<int> currPath(NCITIES);
+
     currPath[0] = initID;
-    for (i = 1; i < NCITIES; i++)
+    for (int i = 1; i < NCITIES; i++)
     {
       currPath[i] = (currPath[i - 1] + 1) % NCITIES;
       currCost += get_dist(currPath[i - 1], currPath[i]);
@@ -136,6 +136,7 @@ void wsp_start() {
     while(std::next_permutation(currPath.begin() + 1, currPath.end()))
     {
       currCost = 0;
+      int i, tmp;
       for(i = 1; i < NCITIES; i++)
       {
         currCost += get_dist(currPath[i - 1], currPath[i]);
