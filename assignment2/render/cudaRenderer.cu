@@ -11,12 +11,28 @@
 #include <cuda_runtime.h>
 #include <driver_functions.h>
 
+#include <thrust/scan.h>
+#include <thrust/sort.h>
+#include <thrust/device_ptr.h>
+
 #include "cudaRenderer.h"
 #include "image.h"
 #include "noise.h"
 #include "sceneLoader.h"
 #include "util.h"
 
+#define CLAMP(x, a, b) min(max(x, a), b)
+
+#define cudaCheckError(ecode) cudaAssert((ecode), __FILE__, __LINE__);
+inline void cudaAssert(cudaError_t ecode, const char *file, int line)
+{
+    if (ecode != cudaSuccess)
+    {
+        fprintf(stderr,
+                "CUDA Error at %s: %d: %s\n",
+                file, line, cudaGetErrorString(ecode));
+    }
+}
 
 ////////////////////////////////////////////////////////////////////////////////////////
 // All cuda kernels here
@@ -461,6 +477,107 @@ __global__ void kernelRenderPixels() {
     }
 }
 
+__device__  void findBoundary(uint32_t tid,
+                              short *minX, short * maxX,
+                              short *minY, short * maxY)
+{
+    float3 center = *(float3 *)(&cuConstRendererParams.position[tid * 3]);
+    float  rad = cuConstRendererParams.radius[tid];
+
+    short imageWidth = cuConstRendererParams.imageWidth;
+    short imageHeight = cuConstRendererParams.imageHeight;
+    *minX = static_cast<short>(imageWidth  * (center.x - rad));
+    *maxX = static_cast<short>(imageWidth  * (center.x + rad)) + 1;
+    *minY = static_cast<short>(imageHeight * (center.y - rad));
+    *maxY = static_cast<short>(imageHeight * (center.y + rad)) + 1;
+
+    *minX = CLAMP(*minX, 0, imageWidth  - 1);
+    *maxX = CLAMP(*maxX, 0, imageWidth  - 1);
+    *minY = CLAMP(*minY, 0, imageHeight - 1);
+    *maxY = CLAMP(*maxY, 0, imageHeight - 1);
+}
+
+// Each thread corresponds to a circle.
+__global__ void kernelCountBin(uint32_t *devBinNum, unsigned short binWidth)
+{
+    uint32_t tid = blockIdx.x * blockDim.x + threadIdx.x;
+    if (tid >= cuConstRendererParams.numberOfCircles)
+        return;
+
+    short minX, maxX;
+    short minY, maxY;
+    findBoundary(tid, &minX, &maxX, &minY, &maxY);
+
+    unsigned short binNumX = (maxX - minX + 1) / binWidth;
+    unsigned short binNumY = (maxY - minY + 1) / binWidth;
+
+    devBinNum[tid] = binNumX * binNumY;
+}
+
+__global__ void kernelBindBinStart(uint32_t *devBinStart, uint32_t *devBinIdx, uint32_t *devCircleIdx)
+{
+    uint32_t tid = blockIdx.x * blockDim.x + threadIdx.x;
+    if (tid >= cuConstRendererParams.numberOfCircles)
+        return;
+
+    short minX, maxX;
+    short minY, maxY;
+    findBoundary(tid, &minX, &maxX, &minY, &maxY);
+
+    short k = devBinStart[tid];
+    for (short i = minY; i < maxY; i++)
+    {
+        for (short j = minX; j < maxX; j++)
+        {
+            int index = i * cuConstRendererParams.imageWidth + j;
+            devBinIdx[k] = index;
+            devCircleIdx[k] = tid;
+            k++;
+        }
+    }
+}
+
+__global__ void kernalSortValue(uint32_t *devBinIdx,
+                                uint32_t *devCircleIdx,
+                                uint32_t totalBinNum)
+{
+    uint32_t tid = blockIdx.x * blockDim.x + threadIdx.x;
+    if (tid >= totalBinNum)
+        return;
+    if (tid !=0 && devBinIdx[tid] == devBinIdx[tid - 1])
+        return;
+
+    uint32_t i = tid;
+    while (i < totalBinNum - 1 &&
+           devBinIdx[tid] == devBinIdx[tid + 1])
+    {
+        i++;
+    }
+    thrust::sort(thrust::device_ptr<uint32_t>(devCircleIdx + tid),
+                 thrust::device_ptr<uint32_t>(devCircleIdx + i + 1));
+
+}
+
+__global__ void kernalRender(uint32_t *devBinIdx,
+                             uint32_t *devCircleIdx,
+                             uint32_t pixelNum)
+{
+    uint32_t tid = blockIdx.x * blockDim.x + threadIdx.x;
+    if (tid >= pixelNum)
+        return;
+    if (tid !=0 && devBinIdx[tid] == devBinIdx[tid - 1])
+        return;
+
+    uint32_t i = tid;
+    while (i < totalBinNum - 1 &&
+           devBinIdx[tid] == devBinIdx[tid + 1])
+    {
+        i++;
+    }
+    thrust::sort(thrust::device_ptr<uint32_t>(devCircleIdx + tid),
+                 thrust::device_ptr<uint32_t>(devCircleIdx + i + 1));
+
+}
 ////////////////////////////////////////////////////////////////////////////////////////
 
 
@@ -499,6 +616,8 @@ CudaRenderer::~CudaRenderer() {
         cudaFree(cudaDeviceColor);
         cudaFree(cudaDeviceRadius);
         cudaFree(cudaDeviceImageData);
+        cudaFree(devBinNum);
+        cudaFree(devBinStart);
     }
 }
 
@@ -571,6 +690,8 @@ CudaRenderer::setup() {
     cudaMalloc(&cudaDeviceColor, sizeof(float) * 3 * numberOfCircles);
     cudaMalloc(&cudaDeviceRadius, sizeof(float) * numberOfCircles);
     cudaMalloc(&cudaDeviceImageData, sizeof(float) * 4 * image->width * image->height);
+    cudaMalloc(&devBinNum, sizeof(uint32_t) * numberOfCircles);
+    cudaMalloc(&devBinStart, sizeof(uint32_t) * numberOfCircles);
 
     cudaMemcpy(cudaDevicePosition, position, sizeof(float) * 3 * numberOfCircles, cudaMemcpyHostToDevice);
     cudaMemcpy(cudaDeviceVelocity, velocity, sizeof(float) * 3 * numberOfCircles, cudaMemcpyHostToDevice);
@@ -679,13 +800,64 @@ CudaRenderer::advanceAnimation() {
     cudaDeviceSynchronize();
 }
 
-void
-CudaRenderer::render() {
-    // 256 threads per block is a healthy number
-    dim3 blockDim(256, 1);
-    int pixelNum = image->width * image->height;
-    dim3 gridDim((pixelNum + blockDim.x - 1) / blockDim.x);
+void CudaRenderer::render() {
+    /* 
+     * get the number of bins for each circle
+     */
+    dim3 blockDim(256);
+    dim3 gridDim((numberOfCircles + blockDim.x - 1) / blockDim.x);
+    kernelCountBin<<<gridDim, blockDim>>>(devBinNum, binWidth);
+    // prepare for calculating totalBinNum
+    uint32_t lastCircleBinNum;
+    cudaMemcpy(&lastCircleBinNum,
+               devBinNum + numberOfCircles - 1,
+               sizeof(lastCircleBinNum),
+               cudaMemcpyDeviceToHost);
 
-    kernelRenderPixels<<<gridDim, blockDim>>>();
-    cudaDeviceSynchronize();
+    /* 
+     * get the first index of bins for each circle
+     */
+    thrust::exclusive_scan(thrust::device_ptr<uint32_t>(devBinNum),
+                           thrust::device_ptr<uint32_t>(devBinNum + numberOfCircles),
+                           thrust::device_ptr<uint32_t>(devBinStart));
+
+    /*
+     * The number of bins
+     */
+    uint32_t totalBinNum;
+    cudaMemcpy(&totalBinNum,
+               devBinStart + numberOfCircles - 1,
+               sizeof(totalBinNum),
+               cudaMemcpyDeviceToHost);
+    totalBinNum += lastCircleBinNum;
+
+    /*
+     * Bind every circle and the corresponding
+     * bin-start index.
+     */
+    cudaMalloc(&devBinIdx, sizeof(uint32_t) * totalBinNum);
+    cudaMalloc(&devCircleIdx, sizeof(uint32_t) * totalBinNum);
+    kernelBindBinStart<<<gridDim, blockDim>>>(devBinStart, devBinIdx, devCircleIdx);
+
+    /*
+     * Sort according to bin index.
+     */
+    thrust::sort_by_key(thrust::device_ptr<uint32_t>(devBinIdx),
+                        thrust::device_ptr<uint32_t>(devBinIdx + totalBinNum),
+                        thrust::device_ptr<uint32_t>(devCircleIdx));
+
+    gridDim.x = (totalBinNum + blockDim.x - 1) / blockDim.x;
+    kernalSortValue<<<gridDim, blockDim>>>(devBinIdx, devCircleIdx, totalBinNum);
+
+    /*
+     * Render
+     */
+    uint32_t pixelNum = totalBinNum * (uint32_t)binWidth * (uint32_t)binWidth;
+    gridDim.x = (pixelNum + blockDim.x - 1) / blockDim.x;
+    kernelRender<<<gridDim, blockDim>>>();
+
+    cudaCheckError(cudaDeviceSynchronize());
+
+    cudaFree(devBinIdx);
+    cudaFree(devCircleIdx);
 }
