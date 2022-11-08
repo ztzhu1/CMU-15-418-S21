@@ -31,9 +31,17 @@ OBJS=$(OBJDIR)/main.o $(OBJDIR)/display.o $(OBJDIR)/benchmark.o $(OBJDIR)/refRen
      $(OBJDIR)/cudaRenderer.o $(OBJDIR)/noise.o $(OBJDIR)/ppm.o $(OBJDIR)/sceneLoader.o
 
 
-.PHONY: dirs clean
+.PHONY: dirs clean run prof
 
 default: $(EXECUTABLE)
+
+test ?= rgb
+dev  ?= cuda
+run: $(EXECUTABLE)
+	./$(EXECUTABLE) -r $(dev) $(test)
+
+prof: $(EXECUTABLE)
+	nvprof ./$(EXECUTABLE) -r $(dev) $(test)
 
 dirs:
 		mkdir -p $(OBJDIR)/
