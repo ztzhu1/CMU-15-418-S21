@@ -21,7 +21,7 @@
 #include "sceneLoader.h"
 #include "util.h"
 
-#define CLAMP(x, a, b) min(max(x, a), b)
+#define MYCLAMP(x, a, b) min(max(x, a), b)
 
 #define cudaCheckError(ecode) cudaAssert((ecode), __FILE__, __LINE__);
 inline void cudaAssert(cudaError_t ecode, const char *file, int line)
@@ -29,7 +29,7 @@ inline void cudaAssert(cudaError_t ecode, const char *file, int line)
     if (ecode != cudaSuccess)
     {
         fprintf(stderr,
-                "CUDA Error at %s: %d: %s\n",
+                "CUDA Error at %s(%d): %s\n",
                 file, line, cudaGetErrorString(ecode));
     }
 }
@@ -491,10 +491,10 @@ __device__  void findBoundary(uint32_t tid,
     *minY = static_cast<short>(imageHeight * (center.y - rad));
     *maxY = static_cast<short>(imageHeight * (center.y + rad)) + 1;
 
-    *minX = CLAMP(*minX, 0, imageWidth  - 1);
-    *maxX = CLAMP(*maxX, 0, imageWidth  - 1);
-    *minY = CLAMP(*minY, 0, imageHeight - 1);
-    *maxY = CLAMP(*maxY, 0, imageHeight - 1);
+    *minX = MYCLAMP(*minX, 0, imageWidth  - 1);
+    *maxX = MYCLAMP(*maxX, 0, imageWidth  - 1);
+    *minY = MYCLAMP(*minY, 0, imageHeight - 1);
+    *maxY = MYCLAMP(*maxY, 0, imageHeight - 1);
 }
 
 // Each thread corresponds to a circle.
@@ -537,46 +537,44 @@ __global__ void kernelBindBinStart(uint32_t *devBinStart, uint32_t *devBinIdx, u
     }
 }
 
-__global__ void kernalSortValue(uint32_t *devBinIdx,
-                                uint32_t *devCircleIdx,
-                                uint32_t totalBinNum)
+__global__ void kernelRender(uint32_t *devBinIdx,
+                             uint32_t *devCircleIdx,
+                             uint32_t totalBinNum)
 {
     uint32_t tid = blockIdx.x * blockDim.x + threadIdx.x;
     if (tid >= totalBinNum)
         return;
-    if (tid !=0 && devBinIdx[tid] == devBinIdx[tid - 1])
+    if (tid != 0 && devBinIdx[tid] == devBinIdx[tid - 1])
         return;
 
-    uint32_t i = tid;
-    while (i < totalBinNum - 1 &&
+    uint32_t end = tid;
+    while (end < totalBinNum - 1 &&
            devBinIdx[tid] == devBinIdx[tid + 1])
     {
-        i++;
+        end++;
     }
-    thrust::sort(thrust::device_ptr<uint32_t>(devCircleIdx + tid),
-                 thrust::device_ptr<uint32_t>(devCircleIdx + i + 1));
 
-}
-
-__global__ void kernalRender(uint32_t *devBinIdx,
-                             uint32_t *devCircleIdx,
-                             uint32_t pixelNum)
-{
-    uint32_t tid = blockIdx.x * blockDim.x + threadIdx.x;
-    if (tid >= pixelNum)
-        return;
-    if (tid !=0 && devBinIdx[tid] == devBinIdx[tid - 1])
-        return;
-
-    uint32_t i = tid;
-    while (i < totalBinNum - 1 &&
-           devBinIdx[tid] == devBinIdx[tid + 1])
+    int w = cuConstRendererParams.imageWidth;
+    int h = cuConstRendererParams.imageHeight;
+    for (int i = tid; i <= end; i++)
     {
-        i++;
+        int x = devBinIdx[i] % w;
+        int y = devBinIdx[i] / h;
+        float2 pixelCenterNorm =
+            make_float2(float(x) / float(w) + 0.5f,
+                        float(y) / float(h) + 0.5f);
+        int circle = devCircleIdx[i];
+        float3 p = *(float3 *)(cuConstRendererParams.position + 3 * circle);
+        float rad = cuConstRendererParams.radius[circle];
+        float distance =
+            powf(pixelCenterNorm.x - p.x, 2.f) + 
+            powf(pixelCenterNorm.y - p.y, 2.f);
+        if (distance <= powf(rad, 2.f))
+        {
+            float4* imgPtr = (float4*)(&cuConstRendererParams.imageData[4 * (y * w + x)]);
+            shadePixel(pixelCenterNorm, p, imgPtr, circle);
+        }
     }
-    thrust::sort(thrust::device_ptr<uint32_t>(devCircleIdx + tid),
-                 thrust::device_ptr<uint32_t>(devCircleIdx + i + 1));
-
 }
 ////////////////////////////////////////////////////////////////////////////////////////
 
@@ -677,6 +675,23 @@ CudaRenderer::setup() {
                "NVIDIA RTX 2080.\n");
         printf("---------------------------------------------------------\n");
     }
+
+    if (numberOfCircles < 100)
+	{
+		binWidth = 4;
+	}
+	else if (numberOfCircles >= 100 && numberOfCircles < 1000)
+	{
+		binWidth = 8;
+	}
+	else if (numberOfCircles >= 1000 && numberOfCircles < 10000)
+	{
+		binWidth = 16;
+	}
+	else
+	{
+		binWidth = 64;
+	}
     
     // By this time the scene should be loaded.  Now copy all the key
     // data structures into device memory so they are accessible to
@@ -804,22 +819,32 @@ void CudaRenderer::render() {
     /* 
      * get the number of bins for each circle
      */
+
     dim3 blockDim(256);
     dim3 gridDim((numberOfCircles + blockDim.x - 1) / blockDim.x);
     kernelCountBin<<<gridDim, blockDim>>>(devBinNum, binWidth);
     // prepare for calculating totalBinNum
     uint32_t lastCircleBinNum;
-    cudaMemcpy(&lastCircleBinNum,
-               devBinNum + numberOfCircles - 1,
-               sizeof(lastCircleBinNum),
-               cudaMemcpyDeviceToHost);
+    cudaCheckError(
+        cudaMemcpy(
+            &lastCircleBinNum,
+            devBinNum + numberOfCircles - 1,
+            sizeof(lastCircleBinNum),
+            cudaMemcpyDeviceToHost));
 
     /* 
      * get the first index of bins for each circle
      */
-    thrust::exclusive_scan(thrust::device_ptr<uint32_t>(devBinNum),
-                           thrust::device_ptr<uint32_t>(devBinNum + numberOfCircles),
-                           thrust::device_ptr<uint32_t>(devBinStart));
+    // thrust::exclusive_scan(
+    //     thrust::device_ptr<int>(b),
+    //     thrust::device_ptr<int>(b + 3),
+    //     thrust::device_ptr<int>(b));
+
+
+    thrust::exclusive_scan(
+        thrust::device_ptr<uint>(devBinNum),
+        thrust::device_ptr<uint>(devBinNum + numberOfCircles),
+        thrust::device_ptr<uint>(devBinStart));
 
     /*
      * The number of bins
@@ -835,26 +860,27 @@ void CudaRenderer::render() {
      * Bind every circle and the corresponding
      * bin-start index.
      */
-    cudaMalloc(&devBinIdx, sizeof(uint32_t) * totalBinNum);
-    cudaMalloc(&devCircleIdx, sizeof(uint32_t) * totalBinNum);
+
+    cudaCheckError(cudaMalloc(&devBinIdx, sizeof(uint32_t) * totalBinNum));
+    cudaCheckError(cudaMalloc(&devCircleIdx, sizeof(uint32_t) * totalBinNum));
     kernelBindBinStart<<<gridDim, blockDim>>>(devBinStart, devBinIdx, devCircleIdx);
 
     /*
      * Sort according to bin index.
      */
-    thrust::sort_by_key(thrust::device_ptr<uint32_t>(devBinIdx),
+    thrust::stable_sort_by_key(thrust::device_ptr<uint32_t>(devBinIdx),
                         thrust::device_ptr<uint32_t>(devBinIdx + totalBinNum),
                         thrust::device_ptr<uint32_t>(devCircleIdx));
-
-    gridDim.x = (totalBinNum + blockDim.x - 1) / blockDim.x;
-    kernalSortValue<<<gridDim, blockDim>>>(devBinIdx, devCircleIdx, totalBinNum);
 
     /*
      * Render
      */
-    uint32_t pixelNum = totalBinNum * (uint32_t)binWidth * (uint32_t)binWidth;
-    gridDim.x = (pixelNum + blockDim.x - 1) / blockDim.x;
-    kernelRender<<<gridDim, blockDim>>>();
+    // uint32_t pixelNum = totalBinNum * (uint32_t)binWidth * (uint32_t)binWidth;
+    // gridDim.x = (pixelNum + blockDim.x - 1) / blockDim.x;
+    gridDim.x = (totalBinNum + blockDim.x - 1) / blockDim.x;
+    kernelRender<<<gridDim, blockDim>>>(devBinIdx,
+                                        devCircleIdx,
+                                        totalBinNum);
 
     cudaCheckError(cudaDeviceSynchronize());
 
