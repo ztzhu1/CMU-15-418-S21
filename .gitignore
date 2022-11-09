@@ -9,3 +9,4 @@ objs
 *.log
 *.pl
 *.ppm
+test/*
