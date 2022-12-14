@@ -1,5 +1,6 @@
 EXECUTABLE := render
-LDFLAGS=-L/usr/local/cuda-11.8/lib64/ -lcudart
+LDFLAGS=-L/usr/local/cuda-11.8/targets/x86_64-linux/lib -lcudart
+INCLUDE=-I/usr/local/cuda-11.8/targets/x86_64-linux/include
 CU_FILES   := cudaRenderer.cu
 CU_DEPS    :=
 CC_FILES   := main.cpp display.cpp benchmark.cpp refRenderer.cpp \
@@ -13,13 +14,13 @@ all: $(EXECUTABLE)
 ARCH=$(shell uname | sed -e 's/-.*//g')
 OBJDIR=objs
 CXX=g++ -m64
-CXXFLAGS=-O3 -Wall -g
+CXXFLAGS=-O3 -Wall -g $(INCLUDE)
 HOSTNAME=$(shell hostname)
 
 LIBS       :=
 FRAMEWORKS :=
 
-NVCCFLAGS=-O3 -m64 --gpu-architecture compute_61 -ccbin /usr/bin/gcc
+NVCCFLAGS=-O3 -m64 --gpu-architecture compute_61 -ccbin /usr/bin/gcc $(INCLUDE)
 LIBS += GL glut cudart
 
 LDLIBS  := $(addprefix -l, $(LIBS))

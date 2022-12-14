@@ -21,7 +21,9 @@
 #include "sceneLoader.h"
 #include "util.h"
 
-#define MYCLAMP(x, a, b) min(max(x, a), b)
+#define MAX(a, b) (a > b ? a : b)
+#define MIN(a, b) (a < b ? a : b)
+#define MYCLAMP(x, a, b) MIN(MAX(x, a), b)
 
 #define cudaCheckError(ecode) cudaAssert((ecode), __FILE__, __LINE__);
 inline void cudaAssert(cudaError_t ecode, const char *file, int line)
@@ -421,18 +423,18 @@ __global__ void kernelRenderCircles() {
 
     // Compute the bounding box of the circle. The bound is in integer
     // screen coordinates, so it's clamped to the edges of the screen.
-    short imageWidth = cuConstRendererParams.imageWidth;
-    short imageHeight = cuConstRendererParams.imageHeight;
-    short minX = static_cast<short>(imageWidth * (p.x - rad));
-    short maxX = static_cast<short>(imageWidth * (p.x + rad)) + 1;
-    short minY = static_cast<short>(imageHeight * (p.y - rad));
-    short maxY = static_cast<short>(imageHeight * (p.y + rad)) + 1;
+    int imageWidth = cuConstRendererParams.imageWidth;
+    int imageHeight = cuConstRendererParams.imageHeight;
+    int minX = static_cast<int>(imageWidth * (p.x - rad));
+    int maxX = static_cast<int>(imageWidth * (p.x + rad)) + 1;
+    int minY = static_cast<int>(imageHeight * (p.y - rad));
+    int maxY = static_cast<int>(imageHeight * (p.y + rad)) + 1;
 
     // A bunch of clamps.  Is there a CUDA built-in for this?
-    short screenMinX = (minX > 0) ? ((minX < imageWidth) ? minX : imageWidth) : 0;
-    short screenMaxX = (maxX > 0) ? ((maxX < imageWidth) ? maxX : imageWidth) : 0;
-    short screenMinY = (minY > 0) ? ((minY < imageHeight) ? minY : imageHeight) : 0;
-    short screenMaxY = (maxY > 0) ? ((maxY < imageHeight) ? maxY : imageHeight) : 0;
+    int screenMinX = (minX > 0) ? ((minX < imageWidth) ? minX : imageWidth) : 0;
+    int screenMaxX = (maxX > 0) ? ((maxX < imageWidth) ? maxX : imageWidth) : 0;
+    int screenMinY = (minY > 0) ? ((minY < imageHeight) ? minY : imageHeight) : 0;
+    int screenMaxY = (maxY > 0) ? ((maxY < imageHeight) ? maxY : imageHeight) : 0;
 
     float invWidth = 1.f / imageWidth;
     float invHeight = 1.f / imageHeight;
@@ -452,15 +454,15 @@ __global__ void kernelRenderCircles() {
 // Each thread renders a pixel.
 __global__ void kernelRenderPixels() {
 
-    short imageWidth = cuConstRendererParams.imageWidth;
-    short imageHeight = cuConstRendererParams.imageHeight;
+    int imageWidth = cuConstRendererParams.imageWidth;
+    int imageHeight = cuConstRendererParams.imageHeight;
     float invWidth = 1.f / imageWidth;
     float invHeight = 1.f / imageHeight;
     int index = blockIdx.x * blockDim.x + threadIdx.x;
     int pixelX = index % imageWidth;
     int pixelY = index / imageWidth;
 
-    if ((short)index >= imageWidth * imageHeight)
+    if ((int)index >= imageWidth * imageHeight)
         return;
 
     float4* imgPtr = (float4*)(&cuConstRendererParams.imageData[4 * index]);
@@ -478,18 +480,18 @@ __global__ void kernelRenderPixels() {
 }
 
 __device__  void findBoundary(uint32_t tid,
-                              short *minX, short * maxX,
-                              short *minY, short * maxY)
+                              int *minX, int * maxX,
+                              int *minY, int * maxY)
 {
     float3 center = *(float3 *)(&cuConstRendererParams.position[tid * 3]);
     float  rad = cuConstRendererParams.radius[tid];
 
-    short imageWidth = cuConstRendererParams.imageWidth;
-    short imageHeight = cuConstRendererParams.imageHeight;
-    *minX = static_cast<short>(imageWidth  * (center.x - rad));
-    *maxX = static_cast<short>(imageWidth  * (center.x + rad)) + 1;
-    *minY = static_cast<short>(imageHeight * (center.y - rad));
-    *maxY = static_cast<short>(imageHeight * (center.y + rad)) + 1;
+    int imageWidth = cuConstRendererParams.imageWidth;
+    int imageHeight = cuConstRendererParams.imageHeight;
+    *minX = static_cast<int>(imageWidth  * (center.x - rad));
+    *maxX = static_cast<int>(imageWidth  * (center.x + rad)) + 1;
+    *minY = static_cast<int>(imageHeight * (center.y - rad));
+    *maxY = static_cast<int>(imageHeight * (center.y + rad)) + 1;
 
     *minX = MYCLAMP(*minX, 0, imageWidth  - 1);
     *maxX = MYCLAMP(*maxX, 0, imageWidth  - 1);
@@ -498,36 +500,38 @@ __device__  void findBoundary(uint32_t tid,
 }
 
 // Each thread corresponds to a circle.
-__global__ void kernelCountBin(uint32_t *devBinNum, unsigned short binWidth)
+__global__ void kernelCountBin(uint32_t *devBinNum, unsigned int binWidth)
 {
     uint32_t tid = blockIdx.x * blockDim.x + threadIdx.x;
     if (tid >= cuConstRendererParams.numberOfCircles)
         return;
 
-    short minX, maxX;
-    short minY, maxY;
+    int minX, maxX;
+    int minY, maxY;
     findBoundary(tid, &minX, &maxX, &minY, &maxY);
 
-    unsigned short binNumX = (maxX - minX + 1) / binWidth;
-    unsigned short binNumY = (maxY - minY + 1) / binWidth;
+    unsigned int binNumX = (maxX - minX + 1) / binWidth;
+    unsigned int binNumY = (maxY - minY + 1) / binWidth;
 
     devBinNum[tid] = binNumX * binNumY;
+
+    printf("%d: x in [%d, %d), y in [%d, %d), bin: %d\n", tid, minX, maxX, minY, maxY, devBinNum[tid]);
 }
 
-__global__ void kernelBindBinStart(uint32_t *devBinStart, uint32_t *devBinIdx, uint32_t *devCircleIdx)
+__global__ void kernelBindBinStart(uint32_t *devBinStart, uint32_t *devBinIdx, uint32_t *devCircleIdx, uint32_t binWidth)
 {
     uint32_t tid = blockIdx.x * blockDim.x + threadIdx.x;
     if (tid >= cuConstRendererParams.numberOfCircles)
         return;
 
-    short minX, maxX;
-    short minY, maxY;
+    int minX, maxX;
+    int minY, maxY;
     findBoundary(tid, &minX, &maxX, &minY, &maxY);
 
-    short k = devBinStart[tid];
-    for (short i = minY; i < maxY; i++)
+    int k = devBinStart[tid];
+    for (int i = minY; i < maxY; i += binWidth)
     {
-        for (short j = minX; j < maxX; j++)
+        for (int j = minX; j < maxX; j += binWidth)
         {
             int index = i * cuConstRendererParams.imageWidth + j;
             devBinIdx[k] = index;
@@ -539,7 +543,8 @@ __global__ void kernelBindBinStart(uint32_t *devBinStart, uint32_t *devBinIdx, u
 
 __global__ void kernelRender(uint32_t *devBinIdx,
                              uint32_t *devCircleIdx,
-                             uint32_t totalBinNum)
+                             uint32_t totalBinNum,
+                             uint32_t binWidth)
 {
     uint32_t tid = blockIdx.x * blockDim.x + threadIdx.x;
     if (tid >= totalBinNum)
@@ -549,30 +554,40 @@ __global__ void kernelRender(uint32_t *devBinIdx,
 
     uint32_t end = tid;
     while (end < totalBinNum - 1 &&
-           devBinIdx[tid] == devBinIdx[tid + 1])
+           devBinIdx[end] == devBinIdx[end + 1])
     {
         end++;
     }
 
     int w = cuConstRendererParams.imageWidth;
     int h = cuConstRendererParams.imageHeight;
-    for (int i = tid; i <= end; i++)
+    for (int binIdx = tid; binIdx <= end; binIdx++)
     {
-        int x = devBinIdx[i] % w;
-        int y = devBinIdx[i] / h;
-        float2 pixelCenterNorm =
-            make_float2(float(x) / float(w) + 0.5f,
-                        float(y) / float(h) + 0.5f);
-        int circle = devCircleIdx[i];
-        float3 p = *(float3 *)(cuConstRendererParams.position + 3 * circle);
-        float rad = cuConstRendererParams.radius[circle];
-        float distance =
-            powf(pixelCenterNorm.x - p.x, 2.f) + 
-            powf(pixelCenterNorm.y - p.y, 2.f);
-        if (distance <= powf(rad, 2.f))
+        for (int i = 0; i < binWidth; i++)
         {
-            float4* imgPtr = (float4*)(&cuConstRendererParams.imageData[4 * (y * w + x)]);
-            shadePixel(pixelCenterNorm, p, imgPtr, circle);
+            for (int j = 0; j < binWidth; j++)
+            {
+                int pixelIdx = devBinIdx[binIdx] + j + i * w;
+                int x = pixelIdx % w;
+                int y = pixelIdx / w;
+                assert(x < cuConstRendererParams.imageWidth);
+                assert(x < cuConstRendererParams.imageHeight);
+                float2 pixelCenterNorm =
+                    make_float2((float(x) + 0.5f) / float(w),
+                                (float(y) + 0.5f) / float(h));
+                int circle = devCircleIdx[binIdx];
+                float3 p = *(float3 *)(cuConstRendererParams.position + 3 * circle);
+                float rad = cuConstRendererParams.radius[circle];
+                float distance =
+                    powf(pixelCenterNorm.x - p.x, 2.f) + 
+                    powf(pixelCenterNorm.y - p.y, 2.f);
+                if (distance <= powf(rad, 2.f))
+                {
+                    float4* imgPtr = (float4*)(&cuConstRendererParams.imageData[4 * (y * w + x)]);
+                    // *imgPtr = make_float4(0.5f, 0.5f, 0.5f, 1.f);
+                    shadePixel(pixelCenterNorm, p, imgPtr, circle);
+                }
+            }
         }
     }
 }
@@ -835,11 +850,6 @@ void CudaRenderer::render() {
     /* 
      * get the first index of bins for each circle
      */
-    // thrust::exclusive_scan(
-    //     thrust::device_ptr<int>(b),
-    //     thrust::device_ptr<int>(b + 3),
-    //     thrust::device_ptr<int>(b));
-
 
     thrust::exclusive_scan(
         thrust::device_ptr<uint>(devBinNum),
@@ -863,24 +873,26 @@ void CudaRenderer::render() {
 
     cudaCheckError(cudaMalloc(&devBinIdx, sizeof(uint32_t) * totalBinNum));
     cudaCheckError(cudaMalloc(&devCircleIdx, sizeof(uint32_t) * totalBinNum));
-    kernelBindBinStart<<<gridDim, blockDim>>>(devBinStart, devBinIdx, devCircleIdx);
+    kernelBindBinStart<<<gridDim, blockDim>>>(devBinStart, devBinIdx, devCircleIdx, binWidth);
 
-    /*
-     * Sort according to bin index.
-     */
-    thrust::stable_sort_by_key(thrust::device_ptr<uint32_t>(devBinIdx),
-                        thrust::device_ptr<uint32_t>(devBinIdx + totalBinNum),
-                        thrust::device_ptr<uint32_t>(devCircleIdx));
+    // /*
+    //  * Sort according to bin index.
+    //  */
+    thrust::stable_sort_by_key(
+        thrust::device_ptr<uint32_t>(devBinIdx),
+        thrust::device_ptr<uint32_t>(devBinIdx + totalBinNum),
+        thrust::device_ptr<uint32_t>(devCircleIdx));
 
     /*
      * Render
      */
-    // uint32_t pixelNum = totalBinNum * (uint32_t)binWidth * (uint32_t)binWidth;
-    // gridDim.x = (pixelNum + blockDim.x - 1) / blockDim.x;
+    uint32_t pixelNum = totalBinNum * (uint32_t)binWidth * (uint32_t)binWidth;
+    gridDim.x = (pixelNum + blockDim.x - 1) / blockDim.x;
     gridDim.x = (totalBinNum + blockDim.x - 1) / blockDim.x;
     kernelRender<<<gridDim, blockDim>>>(devBinIdx,
                                         devCircleIdx,
-                                        totalBinNum);
+                                        totalBinNum,
+                                        binWidth);
 
     cudaCheckError(cudaDeviceSynchronize());
 

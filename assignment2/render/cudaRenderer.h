@@ -27,7 +27,7 @@ private:
     float* cudaDeviceRadius;
     float* cudaDeviceImageData;
 
-    unsigned short binWidth;
+    unsigned int binWidth;
     unsigned int *devBinNum;
     unsigned int *devBinStart;
     unsigned int *devBinIdx;
