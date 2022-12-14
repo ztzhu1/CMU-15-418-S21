@@ -567,9 +567,8 @@ __global__ void kernelRender(uint32_t *devBinIdx,
         {
             for (int j = 0; j < binWidth; j++)
             {
-                int pixelIdx = devBinIdx[binIdx] + j + i * w;
-                int x = pixelIdx % w;
-                int y = pixelIdx / w;
+                int x = devBinIdx[binIdx] % w + j;
+                int y = devBinIdx[binIdx] / w + i;
                 assert(x < cuConstRendererParams.imageWidth);
                 assert(x < cuConstRendererParams.imageHeight);
                 float2 pixelCenterNorm =
@@ -584,7 +583,6 @@ __global__ void kernelRender(uint32_t *devBinIdx,
                 if (distance <= powf(rad, 2.f))
                 {
                     float4* imgPtr = (float4*)(&cuConstRendererParams.imageData[4 * (y * w + x)]);
-                    // *imgPtr = make_float4(0.5f, 0.5f, 0.5f, 1.f);
                     shadePixel(pixelCenterNorm, p, imgPtr, circle);
                 }
             }
